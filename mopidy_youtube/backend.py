@@ -1,6 +1,6 @@
 import json
 import os
-
+import subprocess
 import pykka
 from cachetools import TTLCache, cached
 from mopidy import backend, httpclient, listener
@@ -558,22 +558,45 @@ class YouTubePlaybackProvider(backend.PlaybackProvider):
     def should_download(self, uri):
         return True
 
-    def translate_uri(self, uri):
-        """
-        Called when a track is ready to play, we need to return the actual url of
-        the audio. uri must be of the form youtube:video/<title>.<id> or youtube:video:<id>
-        (only videos can be played, playlists are expanded into tracks by
-        YouTubeLibraryProvider.lookup)
-        """
+def translate_uri(self, uri):
+        import subprocess
+        import shutil
+        import os
 
-        logger.debug('youtube PlaybackProvider.translate_uri "%s"', uri)
+        logger.info(f"[FIX-2026] translate_uri called for: {uri}")
 
         video_id = extract_video_id(uri)
-        # if not video_id:
-        #     return None
+        if not video_id:
+            return None
+
+        yt_exe = shutil.which("yt-dlp") or os.path.expanduser("~/va/mopidy-venv/bin/yt-dlp")
 
         try:
-            return youtube.Video.get(video_id).audio_url.get()
+
+            cmd = [
+                yt_exe,
+                '--get-url',
+                '--js-runtimes', 'node',
+                '--remote-components', 'ejs:github',
+                '-f', 'bestaudio',
+                '--no-playlist',
+                f'https://www.youtube.com/watch?v={video_id}'
+            ]
+
+            logger.debug(f"[FIX-2026] Running cmd: {' '.join(cmd)}")
+
+            # Запускаем процесс
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            audio_url = result.stdout.strip()
+
+            if audio_url and audio_url.startswith("http"):
+                logger.info(f"[FIX-2026] Successfully extracted URL via yt-dlp + Node.js")
+                return audio_url
+
+            return None
+
         except Exception as e:
-            logger.error('translate_uri error "%s"', e)
+            logger.error(f"[FIX-2026] yt-dlp execution failed: {e}")
+            if hasattr(e, 'stderr') and e.stderr:
+                logger.error(f"[FIX-2026] yt-dlp stderr: {e.stderr}")
             return None
